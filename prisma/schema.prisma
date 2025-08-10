@@ -1,0 +1,323 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  mfaSecret       String?  // Multi-factor authentication
+  mfaEnabled      Boolean  @default(false)
+  mfaBackupCodes  String[] // Backup codes for MFA
+  role            Role     @default(USER)
+  subscription    Tier     @default(FREE)
+  testsUsed       Int      @default(0)
+  dailyTestLimit  Int      @default(10)
+  concurrentLimit Int      @default(5)
+  apiKey          String?  @unique
+  apiKeyHash      String?  // Hashed API key for security
+  lastLogin       DateTime?
+  isActive        Boolean  @default(true)
+  emailVerified   Boolean  @default(false)
+  emailVerificationToken String?
+  passwordResetToken String?
+  passwordResetExpires DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  loadTestJobs    LoadTestJob[]
+  auditLogs       AuditLog[]
+  loadScripts     LoadScript[]
+  userSessions    UserSession[]
+  
+  @@map("users")
+  @@index([email])
+  @@index([apiKeyHash])
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  sessionToken String   @unique
+  expires      DateTime
+  ipAddress    String?
+  userAgent    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_sessions")
+  @@index([sessionToken])
+  @@index([userId])
+}
+
+model LoadTestJob {
+  id          String    @id @default(cuid())
+  userId      String
+  nodeId      String?   // Assigned testing node
+  targetUrl   String
+  method      String
+  concurrency Int
+  duration    Int
+  scriptId    String?   // Custom script reference
+  status      Status
+  results     Json?
+  metrics     Json?     // Performance metrics
+  headers     Json?     // Custom headers
+  cookies     Json?     // Custom cookies
+  userAgents  String[]  // User agent rotation
+  proxyConfig Json?     // Proxy configuration
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  
+  // Relations
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  node        TestNode? @relation(fields: [nodeId], references: [id])
+  script      LoadScript? @relation(fields: [scriptId], references: [id])
+  
+  @@map("load_test_jobs")
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model TestNode {
+  id              String   @id @default(cuid())
+  name            String
+  location        String   // Geographic location
+  ipAddress       String
+  maxConcurrent   Int      @default(1000)
+  currentLoad     Int      @default(0)
+  status          NodeStatus @default(ACTIVE)
+  lastHealthCheck DateTime?
+  capabilities    Json     // Node-specific features
+  region          String   // AWS region, etc.
+  instanceType   String?  // Cloud instance type
+  autoScaling    Boolean  @default(false)
+  minInstances   Int      @default(1)
+  maxInstances   Int      @default(10)
+  loadThreshold  Float    @default(0.8) // Auto-scaling threshold
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  // Relations
+  loadTestJobs    LoadTestJob[]
+  nodeMetrics     NodeMetrics[]
+  
+  @@map("test_nodes")
+  @@index([status])
+  @@index([location])
+}
+
+model NodeMetrics {
+  id              String   @id @default(cuid())
+  nodeId          String
+  timestamp       DateTime @default(now())
+  cpuUsage        Float
+  memoryUsage     Float
+  networkIn       BigInt
+  networkOut      BigInt
+  diskUsage       Float
+  activeConnections Int
+  responseTime    Float
+  
+  node            TestNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  
+  @@map("node_metrics")
+  @@index([nodeId, timestamp])
+}
+
+model LoadScript {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  jsCode      String   // JavaScript code to execute
+  version     Int      @default(1)
+  isPublic    Boolean  @default(false)
+  authorId    String
+  category    String?  // REST, WebSocket, GraphQL, etc.
+  tags        String[]
+  executionTime Int?   // Expected execution time in seconds
+  memoryLimit  Int?    // Memory limit in MB
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  loadTestJobs LoadTestJob[]
+  author       User     @relation(fields: [authorId], references: [id])
+  
+  @@map("load_scripts")
+  @@index([authorId])
+  @@index([category])
+  @@index([isPublic])
+}
+
+model RealTimeMetrics {
+  id              String   @id @default(cuid())
+  timestamp       DateTime @default(now())
+  activeTests     Int
+  totalUsers      Int
+  systemLoad      Float
+  memoryUsage     Float
+  networkTraffic  Json     // In/out bytes
+  nodeMetrics     Json     // Per-node performance
+  globalLatency   Float    // Average global latency
+  errorRate       Float    // Global error rate
+  
+  @@map("realtime_metrics")
+  @@index([timestamp])
+}
+
+model DailyAnalytics {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date
+  totalTests      Int      @default(0)
+  uniqueUsers     Int      @default(0)
+  avgDuration     Float    @default(0)
+  successRate     Float    @default(0)
+  peakConcurrent  Int      @default(0)
+  dataTransferred BigInt   @default(0)
+  totalRequests   BigInt   @default(0)
+  avgResponseTime Float    @default(0)
+  errorCount      Int      @default(0)
+  
+  @@unique([date])
+  @@map("daily_analytics")
+  @@index([date])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // LOGIN, CREATE_TEST, ADMIN_ACTION, etc.
+  resource  String?  // Resource affected
+  details   Json?    // Additional context
+  ipAddress String?
+  userAgent String?
+  severity  LogSeverity @default(INFO)
+  timestamp DateTime @default(now())
+  
+  // Relations
+  user      User?    @relation(fields: [userId], references: [id])
+  
+  @@map("audit_logs")
+  @@index([timestamp])
+  @@index([userId])
+  @@index([action])
+  @@index([severity])
+}
+
+model AdminSettings {
+  id           String @id @default(cuid())
+  primaryColor String @default("#007AFF")
+  logoUrl      String?
+  siteName     String @default("LoadTester Pro")
+  features     Json   // Feature toggles
+  nodeConfig   Json   // Global node configuration
+  securityConfig Json // Security settings
+  emailConfig  Json   // Email configuration
+  backupConfig Json   // Backup configuration
+  updatedAt    DateTime @updatedAt
+  
+  @@map("admin_settings")
+}
+
+model SystemHealth {
+  id              String   @id @default(cuid())
+  timestamp       DateTime @default(now())
+  status          SystemStatus
+  checks          Json     // Health check results
+  alerts          String[] // Active alerts
+  performance     Json     // Performance metrics
+  
+  @@map("system_health")
+  @@index([timestamp])
+  @@index([status])
+}
+
+model SecurityEvent {
+  id          String   @id @default(cuid())
+  type        SecurityEventType
+  severity    LogSeverity
+  description String
+  details     Json?
+  ipAddress   String?
+  userId      String?
+  resolved    Boolean  @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  timestamp   DateTime @default(now())
+  
+  @@map("security_events")
+  @@index([type])
+  @@index([severity])
+  @@index([timestamp])
+  @@index([resolved])
+}
+
+// Enums
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum Tier {
+  FREE
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+enum Status {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  PAUSED
+}
+
+enum NodeStatus {
+  ACTIVE
+  MAINTENANCE
+  OFFLINE
+  ERROR
+  SCALING
+}
+
+enum LogSeverity {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum SystemStatus {
+  HEALTHY
+  DEGRADED
+  CRITICAL
+  MAINTENANCE
+}
+
+enum SecurityEventType {
+  LOGIN_ATTEMPT
+  SUSPICIOUS_ACTIVITY
+  RATE_LIMIT_EXCEEDED
+  UNAUTHORIZED_ACCESS
+  DATA_BREACH_ATTEMPT
+  SYSTEM_VULNERABILITY
+}
